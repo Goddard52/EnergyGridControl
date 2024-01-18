@@ -82,13 +82,13 @@ end
 
 -- Modify the listenForChargeStatusUpdate function
 function BatteryManager:chargeStatusUpdate(sender)
-        if self.orchestratorAddress then
-                -- Respond with the total battery charge
-                self.messageHandler:sendMessage(sender, self.orchestratorManagerPort, {
-                    code = "ChargeStatus",
-                    content = self.totalCharge
-                })
-        end
+    if self.orchestratorAddress then
+        -- Respond with the total battery charge
+        self.messageHandler:sendMessage(sender, self.orchestratorManagerPort, {
+            code = "ChargeStatus",
+            content = self.totalCharge
+        })
+    end
 end
 
 function BatteryManager:draw()
