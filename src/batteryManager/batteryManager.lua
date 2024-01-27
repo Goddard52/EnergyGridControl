@@ -1,6 +1,7 @@
 local component = require("component")
 local event = require("event")
 local thread = require("thread")
+local serialization = require("serialization")
 
 local BatteryBuffer = require("battery")
 local CommonManager = require("commonManager")
@@ -46,9 +47,10 @@ function BatteryManager.new()
     end)
 
     self.messageHandler:registerHandler(self.orchestratorManagerPort, function(sender, message)
-        if sender == self.orchestratorAddressthen then
-            if message == "Status" then
-                self:chargeStatusUpdate(sender)
+        if sender == self.orchestratorAddress then
+            if message.code == "Status" then
+                self.logger:log("Getting StatusUpdate")
+                self:chargeStatusUpdate()
             end
         end
     end)
@@ -81,14 +83,12 @@ function BatteryManager:getTotalBatteryCharge()
 end
 
 -- Modify the listenForChargeStatusUpdate function
-function BatteryManager:chargeStatusUpdate(sender)
-    if self.orchestratorAddress then
+function BatteryManager:chargeStatusUpdate()
         -- Respond with the total battery charge
-        self.messageHandler:sendMessage(sender, self.orchestratorManagerPort, {
+        self.messageHandler:sendMessage(self.orchestratorAddress, self.orchestratorManagerPort, serialization.serialize({
             code = "ChargeStatus",
             content = self.totalCharge
-        })
-    end
+        }))
 end
 
 function BatteryManager:draw()
