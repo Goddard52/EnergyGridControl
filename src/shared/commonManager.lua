@@ -26,8 +26,7 @@ function CommonManager.create(managerType, managerPort)
         isConnected = false,
         orchestratorAddress = nil,
         orchestratorPort = 123,
-        orchestratorTimeout = 1500,
-
+        orchestratorTimeout = 1200,
         lastOrchestratorHeartbeat = 0,
 
         type = managerType,
@@ -44,18 +43,27 @@ function CommonManager.create(managerType, managerPort)
                 self.logger:log("Handling the Ack...")
 
                 self:handleAcknowledgment(sender)
+        elseif message == "Kill" then
+            -- Handle Kill message
+            self:handleKill(sender)
         end
-        -- Add more handlers if needed
     end)
 
     setmetatable(self, { __index = CommonManager })
     return self
 end
 
+function CommonManager:checkOrchestratorConnection()
+    local time = os.time()
+    if self.isConnected and ((time - self.lastOrchestratorHeartbeat) > self.orchestratorTimeout) then
+        self.logger:log("Orchestrator is unresponsive. Waiting for a new Orchestrator...")
+        self:resetOrchestrator()
+    end
+end
 
 function CommonManager:resetOrchestrator()
-    self.orchestratorAddress = nil
     self.isConnected = false
+    self.orchestratorAddress = nil
     self.logger:log("Resetting Orchestrator information.")
 end
 
@@ -69,12 +77,6 @@ function CommonManager:handleOrchestratorHeartbeat(sender)
 
     -- Update the timestamp for the last heartbeat
     self.lastOrchestratorHeartbeat = os.time()
-
-        -- Check for orchestrator unresponsiveness and initiate re-discovery if necessary
-    if self.isConnected and os.time() - self.lastOrchestratorHeartbeat > self.orchestratorTimeout then
-        self.logger:log("Orchestrator is unresponsive. Waiting for a new Orchestrator...")
-        self:resetOrchestrator()
-    end
 end
 
 function CommonManager:handleAcknowledgment(sender)

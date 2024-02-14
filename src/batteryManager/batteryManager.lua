@@ -22,6 +22,7 @@ function BatteryManager.new()
     thread.create(function()
         while true do
             self:draw()
+            self:checkOrchestratorConnection()
             os.sleep(1)
         end
     end)
@@ -47,11 +48,9 @@ function BatteryManager.new()
     end)
 
     self.messageHandler:registerHandler(self.orchestratorManagerPort, function(sender, message)
-        if sender == self.orchestratorAddress then
-            if message.code == "Status" then
-                self.logger:log("Getting StatusUpdate")
-                self:chargeStatusUpdate()
-            end
+        if message.code == "Status" then
+            self.logger:log("Getting StatusUpdate")
+            self:chargeStatusUpdate()
         end
     end)
     
