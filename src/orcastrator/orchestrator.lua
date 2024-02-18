@@ -19,9 +19,10 @@ function Manager.new(managerType, address)
         self.totalCharge = 0
     end
     if managerType == Enums.ManagerType.TURBINE then
-        self.maintenanceStatus = 100
+        self.maintenanceStatus = 999
         self.turbineType = 0
         self.powerState = 0
+        self.lowestRotorHealth = 999
     end
     return self
 end
@@ -61,6 +62,15 @@ function Orchestrator.new()
         while true do
             self:callForTurbineStatuses()
             os.sleep(300)
+        end 
+    end)
+    self.powerManagementThread = thread.create(function()
+        os.sleep(10)
+        while true do
+            if tableLength(self.batteryManagers) > 0 then
+                self:powerStatus()
+            end
+            os.sleep(10)
         end 
     end)
     
@@ -110,7 +120,6 @@ function Orchestrator:broadcastOrchestratorHeartbeat()
 end
 
 function Orchestrator:addManager(managerType, address)
-    self.logger:log("Tring to Add")
     local managerMap
     if managerType == Enums.ManagerType.BATTERY then
         managerMap = self.batteryManagers
@@ -215,16 +224,36 @@ function Orchestrator:callForTurbineStatuses()
     end
 end
 
-function Orchestrator:updateTurbineStatus(sender, maintenanceStatus)
-    self.turbineManagers[sender].maintenanceStatus = maintenanceStatus
-    self.turbineManagers[sender].attempts = 0
-    self.logger:log("Updated maintenance status for turbine manager at address " .. sender .. ": " .. maintenanceStatus)
+function Orchestrator:updateTurbineStatus(sender, turbineStatus)
+    local turbineManager = self.turbineManagers[sender]
+
+    if turbineStatus then
+        -- Update maintenance status
+        turbineManager.maintenanceStatus = turbineStatus.maintenanceStatus
+        turbineManager.attempts = 0
+
+        -- Update power state if available
+        if turbineStatus.powerState then
+            turbineManager.powerState = turbineStatus.powerState
+        end
+
+        -- Update lowest turbine rotor health if available
+        if turbineStatus.lowestRotorHealth then
+            turbineManager.lowestRotorHealth = turbineStatus.lowestRotorHealth
+        end
+
+        else
+        self.logger:log("Error: Received invalid turbine status for manager at address " .. sender)
+    end
 end
 
+
 function Orchestrator:updateTurbineType(sender, message)
-    self.turbineManagers[sender].turbineType = message
-    self.turbineManagers[sender].attempts = 0
-    self.logger:log("Updated turbine type for turbine manager at address " .. sender .. ": " .. message.content)
+    if message ~= nil then
+        self.turbineManagers[sender].turbineType = message
+        self.turbineManagers[sender].attempts = 0
+        self.logger:log("Updated turbine type for turbine manager at address " .. sender .. ": " .. message.content)
+    end
 end
 
 function Orchestrator:getTurbineType(address)
@@ -238,11 +267,10 @@ function Orchestrator:getTurbineType(address)
     end
 
 end
-
 -- 
 -- Power Functions
 -- 
-function Orchestrator:callForPower()
+function Orchestrator:powerStatus()
     local totalCharge = self:getBatteryChargePercentage()
 
     local steamPowerState = self:getTurbinePowerState(Enums.TurbineType.STEAM, totalCharge)
@@ -253,19 +281,21 @@ function Orchestrator:callForPower()
     for address, turbineManager in pairs(self.turbineManagers) do
         local message = {
             code = "PowerState",
-            powerState = Enums.PowerState.OFF
+            content = {
+                powerState = Enums.PowerState.OFF
+            }
         }
 
         if turbineManager.turbineType == Enums.TurbineType.STEAM then
-            message.powerState = steamPowerState
+            message.content.powerState = steamPowerState
         elseif turbineManager.turbineType == Enums.TurbineType.BENZENE then
-            message.powerState = benzenePowerState
+            message.content.powerState = benzenePowerState
         elseif turbineManager.turbineType == Enums.TurbineType.HIGH_OCTANE then
-            message.powerState = highOctanePowerState
+            message.content.powerState = highOctanePowerState
         end
 
         self.messageHandler:sendMessage(address, self.turbineManagerPort, serialization.serialize(message))
-        self.logger:log("Sent PowerState message to turbine manager at address " .. address .. ": " .. message.powerState)
+        self.logger:log("Sent PowerState message to turbine manager at address " .. address .. ": " .. message.content.powerState)
     end
 end
 
@@ -309,8 +339,8 @@ function Orchestrator:drawScreen()
     -- Display Manager Details
     local yOffset = 6
     for address, turbineManager in pairs(self.turbineManagers) do
-        local managerInfo = string.format("Manager %d: Health: %d%% | Power: %s | Type: %s",
-            yOffset - 4, turbineManager.maintenanceStatus, Enums.PowerState.ToString[turbineManager.powerState], Enums.TurbineType.ToString[turbineManager.turbineType])
+        local managerInfo = string.format("Manager %d: Health: %.2f%% | Power: %s | Type: %s",
+            yOffset - 5, turbineManager.maintenanceStatus, Enums.PowerState.ToString[turbineManager.powerState], Enums.TurbineType.ToString[turbineManager.turbineType])
         self.gpu.set(1, yOffset, managerInfo)
         yOffset = yOffset + 2 -- Adjust the vertical spacing based on your preference
     end
@@ -394,12 +424,12 @@ end
 function Orchestrator:resetManager(type,address)
     if type == Enums.ManagerType.BATTERY.ID then
         self:sendKillMessage(address)
-        self.batteryManagers[address] = nil
+        self.batteryManagers[address] = {}
     elseif type == Enums.ManagerType.TURBINE.ID then
         self:sendKillMessage(address)
-        self.turbineManagers[address] = nil
+        self.turbineManagers[address] = {}
     else
-        return nil
+        self.logger:log("Failed to reset " .. address)
     end
 
     self.logger:log("Reset Manager at address " .. address)

@@ -44,8 +44,8 @@ Enums.TurbineMatrix = {
     [Enums.TurbineType.STEAM] = {
         [Enums.PowerState.OFF] = 100,
         [Enums.PowerState.LOW] = 99,
-        [Enums.PowerState.MED] = 89,
-        [Enums.PowerState.HIGH] = 79
+        [Enums.PowerState.MED] = 97,
+        [Enums.PowerState.HIGH] = 95
     },
     [Enums.TurbineType.BENZENE] = {
         [Enums.PowerState.OFF] = 90,

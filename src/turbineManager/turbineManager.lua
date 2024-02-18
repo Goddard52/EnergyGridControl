@@ -17,14 +17,12 @@ function TurbineManager.new(turbineType)
     self.turbineMap = {}
     self.totalTurbines = 0
     self.activeTurbines = 0
-    self.powerRequirement = ''
+    self.powerRequirement = Enums.PowerState.OFF
     self.powerType = turbineType
     self.maintenanceBuckets = {}
     for i = 0, 6 do
         self.maintenanceBuckets[i] = {}
     end
-
-    self:initTurbines()
 
     thread.create(function()
         while true do
@@ -34,19 +32,29 @@ function TurbineManager.new(turbineType)
         end
     end)
 
+    self:initTurbines()
+
     thread.create(function()
         while true do
-            self:updateMaintenanceBuckets()
-
-            os.sleep(300)
+            self.logger:info("Checking Turbine maintenance...")
+            if self.totalTurbines > 0 then
+                self:updateMaintenanceBuckets()
+                self.logger:info("Checked maintenance")
+                os.sleep(30)
+            else
+                self.logger:info("No Turbines")
+                os.sleep(15)
+            end
         end
     end)
 
     self.messageHandler:registerHandler(self.orchestratorManagerPort, function(sender, message)
         if message.code == "MaintenenceStatus" then
-            self:updateTurbines(message.content)
-        elseif message.code == "CallingForPower" then
-            self:updateTurbines(message.content)
+            if self.totalTurbines > 0 then
+                self:sendMaintenanceStatus(message.content)
+            end
+        elseif message.code == "PowerState" then
+            self:updateTurbines(message.content.powerState)
         elseif message.code == "TurbineType" then
             self.messageHandler:sendMessage(self.orchestratorAddress, self.orchestratorManagerPort, serialization.serialize({
                 code = "TurbineType",
@@ -64,23 +72,23 @@ function TurbineManager:initTurbines()
     -- Turn on all turbines
     for address, componentType in component.list("gt_machine") do
         local turbine = Turbine.new(component.proxy(address))
-        if turbine == nil then
-            return
+        if turbine ~= nil then
+            turbine:isEnabled(true)
+            turbines[address] = turbine -- Change to use address as the key in turbineMap
         end
-        turbine:setWorkAllowed(true)
-        turbines[address] = turbine -- Change to use address as the key in turbineMap
+        
     end
 
     os.sleep(2)  -- Allow time for the machines to start
 
     -- Check the status of all turbines and turn them off
     for _, turbine in pairs(turbines) do
-        if turbine:isActive() then
-            turbine:setWorkAllowed(false)
+        if turbine:isMachineActive() then
+            turbine:isEnabled(false)
             os.sleep(2)  -- Allow time for the machine to stop
 
             -- Check if turbine is off
-            if not turbine:isActive() then
+            if not turbine:isMachineActive() then
                 self.turbineMap[turbine.gtMachine.address] = turbine
                 self.totalTurbines = self.totalTurbines + 1  -- Update total turbine count
             end
@@ -97,25 +105,37 @@ function TurbineManager:updateMaintenanceBuckets()
     -- Populate maintenance buckets based on the number of problems
     for _, turbine in pairs(self.turbineMap) do
         local numOfProblems = turbine:getMaintenance()
-        table.insert(self.maintenanceBuckets[numOfProblems], turbine.gtMachine.address)
+        self.logger:info("Turbine: " .. numOfProblems)
+        local bucketIndex = math.floor(numOfProblems)  -- Convert to integer
+        table.insert(self.maintenanceBuckets[bucketIndex], turbine.gtMachine.address)
+    end
+
+    -- Print the number of addresses in each bucket
+    for i = 0, 6 do
+        self.logger:info("Bucket " .. i .. ": " .. #self.maintenanceBuckets[i] .. " turbines")
     end
 end
 
-function TurbineManager:updateTurbine(powerRequirement)
-    local powerFactor
 
-    if powerRequirement == Enums.PowerState.ToString[Enums.PowerState.LOW] then
+function TurbineManager:updateTurbines(powerRequirement)
+    self.logger:info("Updating Turbines with power requirement: " .. Enums.PowerState.ToString[powerRequirement])
+    local powerFactor
+    self.powerRequirement = powerRequirement
+
+    if self.powerRequirement == Enums.PowerState.LOW then
         powerFactor = 0.33
-    elseif powerRequirement == Enums.PowerState.ToString[Enums.PowerState.MED] then
+    elseif self.powerRequirement == Enums.PowerState.MED then
         powerFactor = 0.66
-    elseif powerRequirement == Enums.PowerState.ToString[Enums.PowerState.HIGH] then
+    elseif self.powerRequirement == Enums.PowerState.HIGH then
         powerFactor = 1
     else
         powerFactor = 0
     end
 
-    local requiredTurbines = math.ceil(#self.turbineMap * powerFactor)
+    local requiredTurbines = math.ceil(self.totalTurbines * powerFactor)
     local turbinesStarted = 0
+
+    self.logger:info("Required turbines: " .. requiredTurbines)
 
     for i = 0, 6 do
         local bucket = self.maintenanceBuckets[i]
@@ -123,40 +143,58 @@ function TurbineManager:updateTurbine(powerRequirement)
             local turbine = self.turbineMap[turbineAddress]
 
             if turbine then
-                if turbinesStarted <= requiredTurbines then
+                if turbinesStarted < requiredTurbines then
                     turbine:isEnabled(true)
+                    self.logger:info("Turbine " .. turbineAddress .. " enabled.")
                     turbinesStarted = turbinesStarted + 1
                 else
                     turbine:isEnabled(false)
+                    self.logger:info("Turbine " .. turbineAddress .. " disabled.")
                 end
             end
         end
     end
 
+    self.logger:info("Total turbines started: " .. turbinesStarted)
     self.activeTurbines = turbinesStarted
     self.powerRequirement = powerRequirement
 end
 
+function TurbineManager:getLowestRotorHealth()
+    local lowestRotorHealth = 999
+
+    for _, turbine in pairs(self.turbineMap) do
+        if turbine and turbine.lowestRotorHealth then
+            lowestRotorHealth = math.min(lowestRotorHealth, turbine.lowestRotorHealth)
+        end
+    end
+
+    return lowestRotorHealth
+end
 
 function TurbineManager:getOverallMaintenanceStatus()
-    local totalTurbines = 0
     local totalMaintenance = 0
 
     for _, turbine in pairs(self.turbineMap) do
-        totalTurbines = totalTurbines + 1
         totalMaintenance = totalMaintenance + turbine.maintenance
     end
 
-    local overallMaintenancePercentage = (totalMaintenance / (totalTurbines * 6)) * 100
+    local overallMaintenancePercentage = 100 - ((totalMaintenance / (self.totalTurbines * 6)) * 100)
 
     return overallMaintenancePercentage
 end
 
-function TurbineManager:requestMaintenanceStatus()
-
+function TurbineManager:sendMaintenanceStatus()
+    local maintenanceStatus = self:getOverallMaintenanceStatus()
+    local lowestRotorHealth = self:getLowestRotorHealth()
+    
     local message = {
         code = "MaintenenceStatus",
-        content = self:getOverallMaintenanceStatus()
+        content = {
+            maintenanceStatus = maintenanceStatus,
+            lowestRotorHealth = lowestRotorHealth,
+            powerState = self.powerRequirement
+        }
     }
 
     self.messageHandler:sendMessage(self.orchestratorAddress, self.orchestratorManagerPort, serialization.serialize(message))
@@ -174,11 +212,56 @@ function TurbineManager:draw()
     self.gpu.set(1, 1, "Turbine Manager: " .. connectionStatus)
     self.gpu.set(1, 2, "Total Turbines: " .. self.totalTurbines)
     self.gpu.set(1, 3, "Active Turbines: " .. self.activeTurbines)
-    self.gpu.set(1, 4, "Power Requirement: " .. self.powerRequirement)
+    self.gpu.set(1, 4, "Power Requirement: " .. Enums.PowerState.ToString[self.powerRequirement])
+
+    
+    -- Display number, isActive, and health for all turbines in a table-like layout
+    self.gpu.set(1, 6, "Turbine Status:")
+    local lineCounter = 7 
+
+    if self.totalTurbines > 0 then
+        -- Calculate the width of each section for turbines
+        local sectionWidth = math.floor(screenWidth / 8)
+
+        -- Header line with column labels
+        local turbineIndex = 1
+        for address, _ in pairs(self.turbineMap) do
+            self.gpu.set((turbineIndex - 1) * sectionWidth + 1, lineCounter, "" .. turbineIndex)
+            turbineIndex = turbineIndex + 1
+        end
+        lineCounter = lineCounter + 1
+
+        -- Display ON/OFF status for each turbine
+        turbineIndex = 1
+        for address, turbine in pairs(self.turbineMap) do
+            local statusChar = (turbine.isActive and "ON" or "OFF") or ""
+            self.gpu.set((turbineIndex - 1) * sectionWidth + 1, lineCounter, statusChar)
+            turbineIndex = turbineIndex + 1
+        end
+        lineCounter = lineCounter + 1
+
+        -- Display health percentage for each turbine
+        turbineIndex = 1
+        for address, turbine in pairs(self.turbineMap) do
+            local healthPercentage = math.floor(100 - math.min(6, math.max(0, turbine.maintenance)) * 100 / 6) or 0
+            local healthText = tostring(healthPercentage) .. "%"
+            self.gpu.set((turbineIndex - 1) * sectionWidth + 1, lineCounter, healthText)
+            turbineIndex = turbineIndex + 1
+        end
+        lineCounter = lineCounter + 1
+    end
+
+    --spacer
+    lineCounter = lineCounter + 1
+
+    self.gpu.set(1, lineCounter, "Logs:")
+    --spacer
+    lineCounter = lineCounter + 1
+
         -- Display logs in a box
     local logBoxWidth = screenWidth
     local logBoxHeight = screenHeight - 3
-    local logBoxX, logBoxY = 1, 6    
+    local logBoxX, logBoxY = 1, lineCounter    
     self:drawLogBox(logBoxX, logBoxY, logBoxWidth, logBoxHeight)
 end
 

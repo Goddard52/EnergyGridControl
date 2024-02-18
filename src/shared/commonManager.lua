@@ -45,7 +45,7 @@ function CommonManager.create(managerType, managerPort)
                 self:handleAcknowledgment(sender)
         elseif message == "Kill" then
             -- Handle Kill message
-            self:handleKill(sender)
+            self:resetOrchestrator()
         end
     end)
 
